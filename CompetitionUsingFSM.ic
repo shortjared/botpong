@@ -1,0 +1,346 @@
+/* Competition Using FSM Model */
+
+/********************************
+* Drives a U shape, with lost recovery
+*
+* Start: Drive 1 second straight Forward => 1
+* Alt Start: Sweep the middle => 5
+*
+* 1: Forward
+*    Touch      -> 2
+*    Other Side -> 3
+*
+* 2: Turn Left
+*    Done Touch -> 1
+*
+* 3: Dump & 180 Turn Left
+*    Other Side -> 4
+*    Our Side   -> 5
+*
+* 4: Lost Recovery
+*    Our Side   -> 5
+*
+* 5: Forward
+*    Touch      -> 6
+*    Other Side -> 7
+*
+* 6: Turn Right
+*    Done Touch -> 5
+*
+* 7: Dump & 180 Turn Right
+*    Other Side -> 8
+*    Our Side   -> 1
+*
+* 8: Lost Recovery
+*    Our Side   -> 1
+***********************************/
+
+/* Competition settings */
+//#define MAX_RUN_TIME 90000L
+long MAX_RUN_TIME = 90000L;
+
+/* Motor Macros */
+//macros for controlling the motors
+#define LEFT_MOTOR 2
+#define RIGHT_MOTOR 1
+
+#define GO_RIGHT(power) (motor(RIGHT_MOTOR,(power)))
+#define GO_LEFT(power)  (motor(LEFT_MOTOR,(power)))
+#define GO(left,right) {GO_LEFT(left); GO_RIGHT(right);}
+
+/* motor speeds */
+#define FULL_POWER 100
+#define PARTIAL_POWER 70
+#define TURN_POWER 50
+#define FOLLOW_LINE_POWER 10
+
+/* delay intervals */
+#define WAIT_INITIAL 1600L
+#define WAIT_AFTER_TURN 100L
+#define WAIT_AFTER_TURN_LINE 300L
+#define TURN_180_TIME 400L
+#define TURN_135_TIME 300L
+#define TURN_90_TIME 200L
+#define TURN_45_TIME 100L
+#define DUMP_TIME 100L
+#define DUMP_TIME_LINE 200L
+#define DUMP_TIME_REVERSE 70L
+#define STUCK 4000L
+#define STUCK_SHORT 1500L
+#define WAIT_REVERSE_STUCK 300L
+#define WAIT_AFTER_REVERSE_STUCK 200L
+
+/* Touch Sensors */
+#define LEFT_TOUCH digital(14)
+#define RIGHT_TOUCH digital(15)
+
+/* meta sensing */
+int shortStuckCount = 0;
+#define MAX_STUCK_SHORT 3
+#define MAX_RANDOM_TURN_TIME 400
+#define resetStuckTimer() stuckAtTime = mseconds() + STUCK; shortStuckCount = 0
+
+/* Light sensors */
+#define LEFT_LIGHT lego1
+#define RIGHT_LIGHT lego3
+#define COLOR_THRESHOLD 201 //just split light values into light and dark, this may not work.
+#define WHITE_THRESHOLD 200
+#define BLACK_THRESHOLD 201
+#define WHITE -1    
+#define BLACK 0
+int MY_SIDE;
+int State;
+int lightCount; //Build robustness into reads?
+
+/* global variables */
+long stuckAtTime = 0L;
+
+void main() {
+    while (1) {
+        //print sensors for calibration
+        if (knob() < 50) {
+            printf("Sensors");
+            if (start_button()) { sensors(); }
+        }
+        
+        
+        //U program for 90 Seconds
+        if (knob() >= 50 && knob() < 100) {
+            printf("U 90sec Comp\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 88000L; //2 Seconds for timed leway)
+                State = U_START;
+                Uboth();
+            }
+        }
+        
+        //U program for 90 Seconds w/ Middle Sweep
+        if (knob() >= 100 && knob() < 150) {
+            printf("UM 90sec Comp\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 88000L; //2 Seconds for timed leway)
+                State = UM_START;
+                Uboth();
+            }
+        }
+        
+        //U program for 60 Seconds w/ Middle Sweep
+        if (knob() >= 150 && knob() < 200) {
+            printf("UM 60sec Single\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 58000L; //2 Seconds for timed leway)
+                State = UM_START;
+                Uboth();
+            }
+        }
+        
+    }
+}
+
+
+//sensors
+void sensors() {
+    while(!stop_button()) {
+        //updateSensors();
+        printf("L: %d R:%d\n", LEFT_LIGHT, RIGHT_LIGHT);
+    }
+}
+
+void determineSide() {
+    if(LEFT_LIGHT > BLACK_THRESHOLD)
+      MY_SIDE = BLACK;
+    if(LEFT_LIGHT < WHITE_THRESHOLD)
+      MY_SIDE = WHITE;
+}
+
+//returns 1 if left light sensor detects the color the bot calls my side
+//return 0 otherwise
+int LEFT_MY_SIDE () {
+    if (LEFT_LIGHT < WHITE_THRESHOLD && MY_SIDE == WHITE)
+      return 1;
+    if (LEFT_LIGHT > BLACK_THRESHOLD && MY_SIDE == BLACK)
+      return 1;
+    return 0;
+}
+
+int RIGHT_MY_SIDE () {
+    if (RIGHT_LIGHT < WHITE_THRESHOLD && MY_SIDE == WHITE)
+      return 1;
+    if (RIGHT_LIGHT > BLACK_THRESHOLD && MY_SIDE == BLACK)
+      return 1;
+    return 0;
+}
+
+//Forces two consecutive readings to trigger (Filter Bad Readings)
+int OTHER_SIDE(){
+    if(!LEFT_MY_SIDE() && !RIGHT_MY_SIDE())
+      return 1;
+    else
+      return 0;
+}
+
+int TOUCHING(){
+    if(LEFT_TOUCH || RIGHT_TOUCH)
+      return 1;
+    else
+      return 0;
+}
+
+//Define States as Constants
+#define START 0
+#define FORWARD_RIGHT_SIDE 1
+#define FORWARD_LEFT_SIDE 5
+#define DUMP_RIGHT_SIDE 3
+#define DUMP_LEFT_SIDE 7
+#define LOST_RIGHT_SIDE 4
+#define LOST_LEFT_SIDE 8
+#define TURN_LEFT 2
+#define TURN_RIGHT 6
+#define UM_START -2
+#define U_START -1
+
+//newState sets state to ns, resets stuck timer, and prints the current state to LCD
+#define newState(ns) State = ns; printf("State:%d\n",ns); resetStuckTimer();
+
+//both u and UM
+//selected by start UM_START or U_START
+//this reduces duplicate code
+//FORWARD_LEFT_SIDE == CW Pattern
+//FORWARD_RIGHT_SIDE == CCW Pattern
+
+void Uboth(){
+    reset_system_time();
+    determineSide();
+    stuckAtTime = STUCK;
+    shortStuckCount = 0;
+    //State = START;
+    
+    while(!stop_button() && mseconds() < MAX_RUN_TIME )
+      {
+        //stuck monitoring meta sensing
+        //resetStuckTimer() resets the stuck timer and the stuck short count, generally this is called before each state change.
+        if(mseconds() > stuckAtTime) { //robot is stuck
+            GO(-FULL_POWER,-FULL_POWER) //backup
+              msleep(WAIT_REVERSE_STUCK);
+            ao();                         //wait to prevent wheelie
+            msleep(WAIT_AFTER_REVERSE_STUCK); 
+            stuckAtTime = mseconds() + STUCK_SHORT; //reset stuck time to short time period
+            shortStuckCount++;
+            if (shortStuckCount > MAX_STUCK_SHORT) { //robot has been stuck too many times too quickly
+                resetStuckTimer();
+                //do some avoidance
+                if (State == FORWARD_RIGHT_SIDE) {GO(-FULL_POWER,FULL_POWER) msleep(TURN_45_TIME); } //turn away from wall if in U pattern
+                else if (State == FORWARD_LEFT_SIDE) {GO(FULL_POWER,-FULL_POWER) msleep(TURN_45_TIME); }
+                else if (State == UM_START) {GO(FULL_POWER,-FULL_POWER) msleep(TURN_45_TIME); State = FORWARD_LEFT_SIDE; } //if traversing center turn to our side
+                else {GO (-FULL_POWER,FULL_POWER) msleep((long)random(MAX_RANDOM_TURN_TIME)); //default random turn 
+                }
+            }
+        }
+        /* state transition logic follows.
+         * States are ordered by most likely state first.
+         * States that are in pairs are together, e.g. FORWARD_LEFT_SIDE and FORWARD_RIGHT_SIDE
+         */
+        
+        if (State == FORWARD_RIGHT_SIDE){//Forward
+            GO(FULL_POWER,FULL_POWER)
+              if(TOUCHING()){resetStuckTimer(); newState(TURN_LEFT);}
+            if(OTHER_SIDE()){resetStuckTimer(); newState(DUMP_RIGHT_SIDE);}
+        }
+        
+        else if (State == FORWARD_LEFT_SIDE){//Forward
+            GO(FULL_POWER,FULL_POWER)
+              if(TOUCHING()){resetStuckTimer(); newState(TURN_RIGHT);}
+            if(OTHER_SIDE()){resetStuckTimer(); newState(DUMP_LEFT_SIDE);} 
+        }
+        
+        else if (State == TURN_LEFT){//Turn Left
+            if(TOUCHING()){
+                GO(-FULL_POWER, FULL_POWER)
+              }
+            else {
+                msleep(WAIT_AFTER_TURN);
+                newState(FORWARD_RIGHT_SIDE);
+            }
+        }
+        
+        else if (State == TURN_RIGHT){//Turn Right
+            if(TOUCHING()){
+                GO(FULL_POWER,-FULL_POWER)
+              }
+            else {
+                msleep(WAIT_AFTER_TURN);
+                newState(FORWARD_LEFT_SIDE);
+            }
+        }
+        
+        else if (State == DUMP_RIGHT_SIDE){//Dump & 180 Left
+            GO(FULL_POWER,FULL_POWER)  //go forward to dump
+              msleep(DUMP_TIME);
+            GO(-FULL_POWER, -FULL_POWER) //reverse back to our side
+              msleep(DUMP_TIME * 3L);
+            GO(-PARTIAL_POWER,FULL_POWER) //turn around 
+              msleep(TURN_180_TIME);
+            if(OTHER_SIDE()){newState(LOST_RIGHT_SIDE);} //stuck timer not reset here since this state is a fixed time.
+            else {newState(FORWARD_LEFT_SIDE);}
+        }
+        
+        else if (State == DUMP_LEFT_SIDE){//Dump & 180 Right
+            GO(FULL_POWER,FULL_POWER) //go forward to dump
+              msleep(DUMP_TIME);
+            GO(-FULL_POWER, -FULL_POWER) //reverse to our side
+              msleep(DUMP_TIME * 3L);
+            GO(FULL_POWER,-PARTIAL_POWER) //turn around
+              msleep(TURN_180_TIME);
+            if(OTHER_SIDE()){newState(LOST_LEFT_SIDE);} //stuck timer not reset here since this state is a fixed time.
+            else {newState(FORWARD_RIGHT_SIDE);}
+        }
+        
+        else if (State == LOST_RIGHT_SIDE){//Lost Recovery
+            if(OTHER_SIDE() && !TOUCHING()){
+                GO(FULL_POWER,FULL_POWER)
+              } 
+            else if (OTHER_SIDE() && TOUCHING()) {
+                GO(FULL_POWER,-FULL_POWER)
+              }
+            else{
+                newState(FORWARD_LEFT_SIDE);
+            }
+        }
+        
+        else if (State == LOST_LEFT_SIDE){//Lost Recovery
+            if(OTHER_SIDE() && !TOUCHING()){
+                GO(FULL_POWER,FULL_POWER)
+              } 
+            else if (OTHER_SIDE() && TOUCHING()) {
+                GO(-FULL_POWER,FULL_POWER)
+              }
+            else{
+                newState(FORWARD_RIGHT_SIDE);
+            }    
+        }
+        
+        else if(State == UM_START){//Start State (We should never come back to this) //sweep middle line, face uphill
+            GO(FULL_POWER,FULL_POWER)
+              msleep(WAIT_INITIAL);
+            while(!OTHER_SIDE()){
+                GO(FULL_POWER,FULL_POWER)
+              }
+            GO(-FULL_POWER, -FULL_POWER)
+              msleep(200L);
+            GO(FULL_POWER, -FULL_POWER) // Should do 90 Degree Turn
+              msleep(200L);
+            while(!TOUCHING()){GO(FULL_POWER,FULL_POWER)}
+            GO(FULL_POWER, -FULL_POWER) // Should do 90 Degree Turn
+              msleep(200L);
+            GO(FULL_POWER,FULL_POWER) // go so we are on our side
+              msleep(500L);
+            newState(FORWARD_LEFT_SIDE); //Start up FSM
+        }
+        
+        else if(State == U_START){//Start State (We should never come back to this) //start no sweep face corner
+            GO(FULL_POWER,FULL_POWER)
+              msleep(WAIT_INITIAL);
+            newState(FORWARD_RIGHT_SIDE); //Start up FSM
+        }
+    }
+}

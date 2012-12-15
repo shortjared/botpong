@@ -1,0 +1,309 @@
+/* Competition Initial */
+
+/* Competition settings */
+//#define MAX_RUN_TIME 90000L
+long MAX_RUN_TIME = 90000L;
+/* Motor Macros */
+//macros for controlling the motors
+#define LEFT_MOTOR 2
+#define RIGHT_MOTOR 1
+
+#define GO_RIGHT(power) (motor(RIGHT_MOTOR,(power)))
+#define GO_LEFT(power)  (motor(LEFT_MOTOR,(power)))
+#define GO(left,right) {GO_LEFT(left); GO_RIGHT(right);}
+
+/* motor speeds */
+#define FULL_POWER 100
+#define PARTIAL_POWER -10
+#define TURN_POWER 50
+#define FOLLOW_LINE_POWER 10
+
+/* delay intervals */
+#define WAIT_AFTER_TURN 100L
+#define WAIT_AFTER_TURN_LINE 300L
+#define DUMP_TIME 100L
+#define DUMP_TIME_LINE 200L
+#define DUMP_TIME_REVERSE 70L
+#define STUCK 5000L
+#define STUCK_SHORT 1500L
+
+/* meta sensing */
+int shortStuckCount = 0;
+#define MAX_STUCK_SHORT 3
+
+/* Light sensors */
+#define LEFT_LIGHT lego1
+#define RIGHT_LIGHT lego3
+#define COLOR_THRESHOLD 201 //just split light values into light and dark, this may not work.
+#define WHITE_THRESHOLD 200
+#define BLACK_THRESHOLD 201
+#define WHITE -1    
+#define BLACK 0
+int MY_SIDE;
+
+/* Touch Sensors */
+#define LEFT_TOUCH digital(14)
+#define RIGHT_TOUCH digital(15)
+
+/* global variables */
+int followLine = 0;     //is the robot following the line?
+long stuckAtTime = 0L;
+
+//menu tree
+//knob is low
+//   -->start_button run main
+//     -->stop_button return
+//knob is high
+//   -->start button display sensor value averages
+//     -->stop button return
+
+void main() {
+    while (1) {
+        //print sensors for calibration
+        if (knob() < 60) {
+            printf("Sensors");
+            if (start_button()) { sensors(); }
+        }
+        // ccw square program  60 seconds
+        if (knob() >= 60 && knob() < 120) {
+            printf("CCW Square 60sec\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 60000L;
+                ccwSquare();
+            }
+        }
+        
+        // ccw square program 90 seconds
+        if (knob() >= 120 && knob() < 180) {
+            printf("CCW Square 90sec\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 90000L;
+                ccwSquare();
+            }
+        }
+        
+        // cw square program 90 seconds
+        if (knob() >= 180) {
+            printf("CW Square 90sec\n");
+            if (start_button()) {
+                MAX_RUN_TIME = 90000L;
+                cwSquare();
+            }
+        }
+        
+    }
+}
+
+//sensors
+void sensors() {
+    while(!stop_button()) {
+        //updateSensors();
+        printf("L: %d R:%d\n", LEFT_LIGHT, RIGHT_LIGHT);
+    }
+}
+
+void ccwSquare() {
+    reset_system_time();
+    determineSide();
+    stuckAtTime = STUCK;
+    shortStuckCount = 0;
+    printf("%d",MY_SIDE);
+    GO(FULL_POWER,FULL_POWER)
+      msleep(500L);
+    while(!stop_button() && mseconds() < MAX_RUN_TIME )
+      {
+        if (followLine == 0) {GO(FULL_POWER,FULL_POWER)} //go forward when we aren't following the line
+        
+        if (stuckAtTime < mseconds())
+          {
+            GO(-FULL_POWER,-FULL_POWER)
+              msleep(200L);
+            ao();
+            msleep(200L);
+            stuckAtTime = mseconds() + STUCK_SHORT;
+            shortStuckCount++;
+            if (shortStuckCount >= MAX_STUCK_SHORT) {
+                //random movement
+                shortStuckCount = 0;
+                GO(-FULL_POWER,FULL_POWER) //turn left for random time
+                  msleep((long)random(1500));
+            }
+        }
+        
+        if (RIGHT_TOUCH) {
+            stuckAtTime = mseconds() + STUCK;
+            shortStuckCount = 0;
+            
+            if (followLine == 0) {
+                while(RIGHT_TOUCH && (mseconds() < MAX_RUN_TIME) ) {
+                    GO(-FULL_POWER,FULL_POWER)     
+                  }
+                msleep(WAIT_AFTER_TURN);
+            }
+        }
+        
+        if (followLine == 1 && (LEFT_TOUCH || RIGHT_TOUCH)) { //found the wall dump balls on enemy side and turn around.
+            
+            while(RIGHT_TOUCH && !LEFT_TOUCH && (mseconds() < MAX_RUN_TIME )) { // turn right toward enemy
+                GO(FULL_POWER,FULL_POWER)
+              }
+            
+            while(LEFT_TOUCH && (mseconds() < MAX_RUN_TIME) ) { // turn right toward enemy
+                GO(FULL_POWER,-FULL_POWER)
+              }
+            
+            msleep(WAIT_AFTER_TURN_LINE);
+            
+            GO(FULL_POWER,FULL_POWER)      //go forward .5 seconds
+              msleep(DUMP_TIME_LINE );
+            
+            while(!LEFT_MY_SIDE() || !RIGHT_MY_SIDE()){
+                GO(-FULL_POWER, -FULL_POWER) //Go backwards till we are on our side
+              }
+            msleep(DUMP_TIME * 2L);
+            
+            GO(-FULL_POWER,FULL_POWER)
+              msleep(300L);
+            
+            followLine = 0;
+        }
+        
+        //DUMP BALLS AFTER FINDING ENEMY SIDE
+        if(!LEFT_MY_SIDE() && !RIGHT_MY_SIDE() && followLine == 0) {
+            msleep(DUMP_TIME);
+            
+            while(!LEFT_MY_SIDE() || !RIGHT_MY_SIDE()){
+                GO(-FULL_POWER, -FULL_POWER) //go backwards until we are on our side
+              }      
+            msleep(DUMP_TIME_REVERSE);
+            
+            GO(-FULL_POWER,FULL_POWER)
+              msleep(300L);
+            followLine = 1;
+            stuckAtTime = mseconds() + STUCK;
+            shortStuckCount = 0;
+        }
+        
+        if(followLine == 1) { //follow edge, left on myside, right on enemy side
+            if(LEFT_MY_SIDE() && !RIGHT_MY_SIDE()) {GO(FULL_POWER,FULL_POWER) }
+            if(LEFT_MY_SIDE() && RIGHT_MY_SIDE()) {GO(FULL_POWER,FOLLOW_LINE_POWER)}
+            if(!LEFT_MY_SIDE() && !RIGHT_MY_SIDE()) {GO(FOLLOW_LINE_POWER,FULL_POWER)}
+        }
+    }
+    ao();
+}
+
+
+
+//cw square
+void cwSquare() {
+    reset_system_time();
+    determineSide();
+    stuckAtTime = STUCK;
+    printf("%d",MY_SIDE);
+    GO(FULL_POWER,FULL_POWER)
+      msleep(2500L);
+    while(!stop_button() && mseconds() < MAX_RUN_TIME )
+      {
+        
+        if (followLine == 0) {GO(FULL_POWER,FULL_POWER)} //go forward when we aren't following the line
+        
+        if (stuckAtTime < mseconds())
+          {
+            GO(-FULL_POWER,-FULL_POWER)
+              msleep(400L);
+            ao();
+            msleep(200L);
+            stuckAtTime = mseconds() + STUCK_SHORT;
+        }
+        
+        if (LEFT_TOUCH) {
+            stuckAtTime = mseconds() + STUCK;
+            
+            if (followLine == 0) {
+                while(LEFT_TOUCH && (mseconds() < MAX_RUN_TIME) ) {
+                    GO(FULL_POWER,-FULL_POWER)     
+                  }
+                msleep(WAIT_AFTER_TURN);
+            }
+        }
+        
+        if (followLine == 1 && (LEFT_TOUCH || RIGHT_TOUCH)) { //found the wall dump balls on enemy side and turn around.
+            while(LEFT_TOUCH && !RIGHT_TOUCH && (mseconds() < MAX_RUN_TIME )) { // turn right toward enemy
+                GO(FULL_POWER,FULL_POWER)
+              }
+            while(RIGHT_TOUCH && (mseconds() < MAX_RUN_TIME) ) { // turn right toward enemy
+                GO(-FULL_POWER,FULL_POWER)
+              }
+            msleep(WAIT_AFTER_TURN);
+            
+            GO(FULL_POWER,FULL_POWER)      //go forward .5 seconds
+              msleep(DUMP_TIME);
+            
+            while(!LEFT_MY_SIDE() || !RIGHT_MY_SIDE()){
+                GO(-FULL_POWER, -FULL_POWER) //go backwards until we are on our side
+              }      
+            msleep(DUMP_TIME * 2L);
+            
+            GO(FULL_POWER,-FULL_POWER)
+              msleep(900L);
+            
+            followLine = 0;
+        }
+        
+        //DUMP BALLS AFTER FINDING ENEMY SIDE
+        if(!LEFT_MY_SIDE() && !RIGHT_MY_SIDE() && followLine == 0) {
+            msleep(DUMP_TIME);
+            
+            while(!LEFT_MY_SIDE() || !RIGHT_MY_SIDE()){
+                GO(-FULL_POWER, -FULL_POWER) //go backwards until we are on our side
+              }      
+            msleep(DUMP_TIME_REVERSE);
+            
+            GO(FULL_POWER,-FULL_POWER)
+              msleep(850L);
+            followLine = 1;
+            stuckAtTime = mseconds() + STUCK;
+        }
+        
+        if(followLine == 1) { //follow edge, right on myside, left on enemy side
+            if(!LEFT_MY_SIDE() && RIGHT_MY_SIDE()) {GO(FULL_POWER,FULL_POWER) }
+            if(LEFT_MY_SIDE() && RIGHT_MY_SIDE()) {GO(FOLLOW_LINE_POWER,FULL_POWER)}
+            if(!LEFT_MY_SIDE() && !RIGHT_MY_SIDE()) {GO(FULL_POWER,FOLLOW_LINE_POWER)}
+        }
+    }
+    ao();
+}
+
+void determineSide() {
+    if(LEFT_LIGHT > BLACK_THRESHOLD)
+      MY_SIDE = BLACK;
+    if(LEFT_LIGHT < WHITE_THRESHOLD)
+      MY_SIDE = WHITE;
+}
+
+//returns 1 if left light sensor detects the color the bot calls my side
+//return 0 otherwise
+int LEFT_MY_SIDE_1 () {
+    return !(-(LEFT_LIGHT < COLOR_THRESHOLD) ^ MY_SIDE);
+}
+
+int RIGHT_MY_SIDE_1 () {
+    return !(-(RIGHT_LIGHT < COLOR_THRESHOLD) ^ MY_SIDE);
+}
+
+int LEFT_MY_SIDE () {
+    if (LEFT_LIGHT < WHITE_THRESHOLD && MY_SIDE == WHITE)
+      return 1;
+    if (LEFT_LIGHT > BLACK_THRESHOLD && MY_SIDE == BLACK)
+      return 1;
+    return 0;
+}
+
+int RIGHT_MY_SIDE () {
+    if (RIGHT_LIGHT < WHITE_THRESHOLD && MY_SIDE == WHITE)
+      return 1;
+    if (RIGHT_LIGHT > BLACK_THRESHOLD && MY_SIDE == BLACK)
+      return 1;
+    return 0;
+}
