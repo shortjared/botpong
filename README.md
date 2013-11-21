@@ -1,7 +1,7 @@
 Bot Pong and a Midnight Eureka
 =======
 
-This project was for CS490 class. You can view the recap of the competition on [youtube](http://example.net/).
+This project was for CS490 class.
 
 Everything is built on the [HandyBoard](http://handyboard.com/hb/) (Built on the motorola 68HCxx), and using a lego robotics kit.
 
